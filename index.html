@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#152238">
+  <title>Tab Recorder & Screenshots</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main class="shell">
+    <header><h1>Tab Recorder & Screenshots</h1><p>Capture another Chrome tab, window, or screen. Nothing is uploaded.</p></header>
+    <section class="panel">
+      <div class="controls">
+        <button id="share" class="primary">Choose tab / screen</button>
+        <button id="record" disabled>Start recording</button>
+        <button id="stop" disabled>Stop recording</button>
+        <button id="shot" disabled>Take screenshot</button>
+      </div>
+      <div class="options">
+        <label><input type="checkbox" id="audio" checked> Request shared tab audio</label>
+        <label>Screenshot delay <select id="delay"><option value="0">None</option><option value="3">3 seconds</option><option value="5">5 seconds</option><option value="10">10 seconds</option></select></label>
+      </div>
+      <p id="status" role="status" aria-live="polite">Choose a tab or screen to begin.</p>
+      <video id="live" autoplay muted playsinline aria-label="Live capture preview"></video>
+      <div class="info"><span id="source">No capture selected</span><span id="timer">00:00</span></div>
+    </section>
+    <section class="panel"><h2>Latest recording</h2><video id="playback" controls playsinline></video><a id="videoDownload" class="download hidden" download>Download video</a></section>
+    <section class="panel"><h2>Latest screenshot</h2><img id="screenshot" alt="Screenshot preview" hidden><a id="imageDownload" class="download hidden" download>Download PNG</a></section>
+    <footer>Chrome will always ask what to share. Keep this page open while capturing. Videos use WebM format when supported by Chrome.</footer>
+  </main>
+</body>
+</html>
