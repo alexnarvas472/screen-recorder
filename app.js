@@ -1,4 +1,3 @@
-
 'use strict';
 
 const $ = id => document.getElementById(id);
@@ -17,7 +16,12 @@ const ui = {
   playback: $('playback'),
   videoDownload: $('videoDownload'),
   screenshot: $('screenshot'),
-  imageDownload: $('imageDownload')
+  imageDownload: $('imageDownload'),
+
+  spliceUrl: $('spliceUrl'),
+  saveSpliceUrl: $('saveSpliceUrl'),
+  openSplice: $('openSplice'),
+  sendSplice: $('sendSplice')
 };
 
 let stream = null;
@@ -25,29 +29,159 @@ let recorder = null;
 let chunks = [];
 let started = 0;
 let ticker = null;
+
 let videoUrl = null;
 let imageUrl = null;
 let pendingShot = null;
 
-const say = message => {
-  ui.status.textContent = message;
-};
+let lastScreenshotBase64 = null;
+let lastScreenshotFilename = null;
 
-const stamp = () =>
-  new Date().toISOString().replace(/[:.]/g, '-');
+let spliceWindow = null;
+
+
+// -----------------------------------------------------
+// BASIC HELPERS
+// -----------------------------------------------------
+
+function say(message) {
+  ui.status.textContent = message;
+}
+
+function stamp() {
+  return new Date()
+    .toISOString()
+    .replace(/[:.]/g, '-');
+}
 
 function controls() {
-  const active = !!stream?.getVideoTracks()
-    .some(t => t.readyState === 'live');
+  const active =
+    !!stream?.getVideoTracks()
+      .some(track => track.readyState === 'live');
 
-  const recording = recorder?.state === 'recording';
+  const recording =
+    recorder?.state === 'recording';
 
-  ui.share.disabled = !!recording;
-  ui.record.disabled = !active || !!recording;
+  ui.share.disabled = recording;
+  ui.record.disabled = !active || recording;
   ui.stop.disabled = !recording;
   ui.shot.disabled = !active;
-  ui.audio.disabled = !!recording;
+  ui.audio.disabled = recording;
+
+  if (ui.sendSplice) {
+    ui.sendSplice.disabled =
+      !lastScreenshotBase64;
+  }
 }
+
+
+// -----------------------------------------------------
+// REMEMBER SPLICE BENCH URL
+// -----------------------------------------------------
+
+function loadSavedSpliceUrl() {
+  const saved =
+    localStorage.getItem('spliceBenchUrl');
+
+  if (saved && ui.spliceUrl) {
+    ui.spliceUrl.value = saved;
+  }
+}
+
+function saveSpliceUrl() {
+  const url =
+    String(ui.spliceUrl?.value || '').trim();
+
+  if (!url) {
+    say('Enter your Splice Bench web app URL first.');
+    return;
+  }
+
+  localStorage.setItem(
+    'spliceBenchUrl',
+    url
+  );
+
+  say('Splice Bench URL saved.');
+}
+
+
+// -----------------------------------------------------
+// SCREEN SHARE
+// -----------------------------------------------------
+
+async function chooseCapture() {
+  if (!navigator.mediaDevices?.getDisplayMedia) {
+    say(
+      'Screen capture is unavailable. ' +
+      'Open the published GitHub Pages site in Chrome.'
+    );
+    return;
+  }
+
+  if (stream) {
+    cleanupCapture();
+  }
+
+  try {
+    stream =
+      await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          frameRate: 30
+        },
+        audio: ui.audio.checked
+      });
+
+    ui.live.srcObject = stream;
+
+    await ui.live.play();
+
+    const track =
+      stream.getVideoTracks()[0];
+
+    const settings =
+      track.getSettings();
+
+    ui.source.textContent =
+      `Sharing: ${
+        settings.displaySurface || 'selected source'
+      } (${settings.width || '?'} × ${
+        settings.height || '?'
+      })`;
+
+    track.addEventListener(
+      'ended',
+      () => {
+        say('Sharing ended.');
+        cleanupCapture();
+      }
+    );
+
+    say(
+      'Sharing is active. You can record or take screenshots.'
+    );
+
+    controls();
+
+  } catch (err) {
+    if (err.name === 'NotAllowedError') {
+      say(
+        'Sharing was cancelled or permission was denied.'
+      );
+    } else {
+      say(
+        `Unable to start sharing: ${err.message}`
+      );
+    }
+
+    controls();
+  }
+}
+
+
+// -----------------------------------------------------
+// CLEANUP
+// -----------------------------------------------------
 
 function cleanupCapture() {
   if (pendingShot) {
@@ -55,85 +189,67 @@ function cleanupCapture() {
     pendingShot = null;
   }
 
+  if (
+    recorder &&
+    recorder.state === 'recording'
+  ) {
+    recorder.stop();
+  }
+
   if (stream) {
-    stream.getTracks().forEach(t => t.stop());
+    stream
+      .getTracks()
+      .forEach(track => track.stop());
+
     stream = null;
   }
 
   ui.live.srcObject = null;
-  ui.source.textContent = 'No capture selected';
 
-  if (recorder?.state === 'recording') {
-    recorder.stop();
-  }
+  ui.source.textContent =
+    'No capture selected';
 
   controls();
 }
 
-async function chooseCapture() {
-  if (!navigator.mediaDevices?.getDisplayMedia) {
-    say(
-      'Screen capture is unavailable. ' +
-      'Open the published HTTPS GitHub Pages site in Chrome.'
+
+// -----------------------------------------------------
+// RECORDING TIMER
+// -----------------------------------------------------
+
+function formatElapsed() {
+  const seconds =
+    Math.floor(
+      (Date.now() - started) / 1000
     );
+
+  const mins =
+    Math.floor(seconds / 60);
+
+  const secs =
+    seconds % 60;
+
+  ui.timer.textContent =
+    `${String(mins).padStart(2, '0')}:` +
+    `${String(secs).padStart(2, '0')}`;
+}
+
+
+// -----------------------------------------------------
+// START RECORDING
+// -----------------------------------------------------
+
+function startRecording() {
+  if (!stream) {
+    say('Choose a tab or screen first.');
     return;
   }
 
-  if (stream) cleanupCapture();
-
-  try {
-    const s = await navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: 30 },
-      audio: ui.audio.checked
-    });
-
-    stream = s;
-    ui.live.srcObject = s;
-    await ui.live.play();
-
-    const track = s.getVideoTracks()[0];
-    const settings = track.getSettings();
-
-    ui.source.textContent =
-      `Sharing: ${settings.displaySurface || 'selected source'} ` +
-      `(${settings.width || '?'} × ${settings.height || '?'})`;
-
-    track.addEventListener('ended', () => {
-      say('Sharing ended.');
-      cleanupCapture();
-    });
-
+  if (!window.MediaRecorder) {
     say(
-      'Sharing is active. Switch to the selected tab; ' +
-      'you can record or take screenshots here.'
+      'MediaRecorder is not supported by this browser.'
     );
-
-    controls();
-
-  } catch (e) {
-    say(
-      e.name === 'NotAllowedError'
-        ? 'Sharing was cancelled or denied.'
-        : `Unable to start sharing: ${e.message}`
-    );
-
-    controls();
-  }
-}
-
-function formatElapsed() {
-  const seconds = Math.floor((Date.now() - started) / 1000);
-
-  ui.timer.textContent =
-    `${String(Math.floor(seconds / 60)).padStart(2, '0')}:` +
-    `${String(seconds % 60).padStart(2, '0')}`;
-}
-
-function startRecording() {
-  if (!stream || !window.MediaRecorder) {
-    return say(
-      'Start sharing first; recording is not supported in this browser.'
-    );
+    return;
   }
 
   const types = [
@@ -142,56 +258,88 @@ function startRecording() {
     'video/webm'
   ];
 
-  const mimeType = types.find(t =>
-    MediaRecorder.isTypeSupported(t)
-  );
+  const mimeType =
+    types.find(type =>
+      MediaRecorder.isTypeSupported(type)
+    );
 
   if (!mimeType) {
-    return say('This browser does not support WebM recording.');
+    say(
+      'This browser does not support WebM recording.'
+    );
+    return;
   }
 
   chunks = [];
 
   try {
-    recorder = new MediaRecorder(stream, {
-      mimeType,
-      videoBitsPerSecond: 3500000
-    });
-
-    recorder.ondataavailable = e => {
-      if (e.data.size) chunks.push(e.data);
-    };
-
-    recorder.onerror = e => {
-      say(
-        `Recording error: ${e.error?.message || 'unknown error'}`
+    recorder =
+      new MediaRecorder(
+        stream,
+        {
+          mimeType,
+          videoBitsPerSecond: 3500000
+        }
       );
-    };
+
+    recorder.ondataavailable =
+      event => {
+        if (event.data.size > 0) {
+          chunks.push(event.data);
+        }
+      };
+
+    recorder.onerror =
+      event => {
+        say(
+          `Recording error: ${
+            event.error?.message ||
+            'unknown error'
+          }`
+        );
+      };
 
     recorder.onstop = () => {
       clearInterval(ticker);
       ticker = null;
 
-      const blob = new Blob(chunks, { type: mimeType });
-
-      if (blob.size) {
-        if (videoUrl) URL.revokeObjectURL(videoUrl);
-
-        videoUrl = URL.createObjectURL(blob);
-
-        ui.playback.src = videoUrl;
-        ui.videoDownload.href = videoUrl;
-        ui.videoDownload.download =
-          `recording-${stamp()}.webm`;
-
-        ui.videoDownload.classList.remove('hidden');
-
-        say(
-          'Recording stopped. Use Download video to save it.'
+      const blob =
+        new Blob(
+          chunks,
+          { type: mimeType }
         );
-      } else {
-        say('No recording data was captured.');
+
+      if (!blob.size) {
+        say(
+          'No recording data was captured.'
+        );
+
+        controls();
+        return;
       }
+
+      if (videoUrl) {
+        URL.revokeObjectURL(videoUrl);
+      }
+
+      videoUrl =
+        URL.createObjectURL(blob);
+
+      ui.playback.src =
+        videoUrl;
+
+      ui.videoDownload.href =
+        videoUrl;
+
+      ui.videoDownload.download =
+        `recording-${stamp()}.webm`;
+
+      ui.videoDownload.classList
+        .remove('hidden');
+
+      say(
+        'Recording stopped. Download the video to save it.'
+      );
 
       controls();
     };
@@ -199,138 +347,442 @@ function startRecording() {
     recorder.start(1000);
 
     started = Date.now();
+
     formatElapsed();
 
-    ticker = setInterval(formatElapsed, 500);
+    ticker =
+      setInterval(
+        formatElapsed,
+        500
+      );
 
     say(
-      'Recording. You can work in the shared tab. ' +
-      'Return here to stop.'
+      'Recording. Switch to the shared tab and continue working.'
     );
 
     controls();
 
-  } catch (e) {
-    say(`Cannot record: ${e.message}`);
+  } catch (err) {
+    say(
+      `Cannot record: ${err.message}`
+    );
+
     controls();
   }
 }
 
+
+// -----------------------------------------------------
+// STOP RECORDING
+// -----------------------------------------------------
+
 function stopRecording() {
-  if (recorder?.state === 'recording') {
+  if (
+    recorder &&
+    recorder.state === 'recording'
+  ) {
     recorder.stop();
   }
 }
 
+
+// -----------------------------------------------------
+// CONVERT BLOB TO BASE64
+// -----------------------------------------------------
+
+function blobToBase64(blob) {
+  return new Promise(
+    (resolve, reject) => {
+      const reader =
+        new FileReader();
+
+      reader.onload = () => {
+        const result =
+          String(reader.result);
+
+        const base64 =
+          result.split(',')[1];
+
+        resolve(base64);
+      };
+
+      reader.onerror = reject;
+
+      reader.readAsDataURL(blob);
+    }
+  );
+}
+
+
+// -----------------------------------------------------
+// CAPTURE SCREENSHOT
+// -----------------------------------------------------
+
 async function captureFrame() {
   pendingShot = null;
 
-  if (!stream?.getVideoTracks()
-    .some(t => t.readyState === 'live')) {
-    return say(
+  const active =
+    stream?.getVideoTracks()
+      .some(track =>
+        track.readyState === 'live'
+      );
+
+  if (!active) {
+    say(
       'Sharing has ended. Choose a tab again.'
     );
+    return;
   }
 
   try {
-    const v = ui.live;
+    const video =
+      ui.live;
 
-    if (v.readyState < 2) {
-      await new Promise((resolve, reject) => {
-        const timeout = setTimeout(
-          () => reject(new Error('Video preview not ready')),
-          5000
-        );
+    if (video.readyState < 2) {
+      await new Promise(
+        (resolve, reject) => {
 
-        v.addEventListener('loadeddata', () => {
-          clearTimeout(timeout);
-          resolve();
-        }, { once: true });
-      });
+          const timeout =
+            setTimeout(
+              () =>
+                reject(
+                  new Error(
+                    'Video preview not ready'
+                  )
+                ),
+              5000
+            );
+
+          video.addEventListener(
+            'loadeddata',
+            () => {
+              clearTimeout(timeout);
+              resolve();
+            },
+            { once: true }
+          );
+        }
+      );
     }
 
-    const w = v.videoWidth;
-    const h = v.videoHeight;
+    const width =
+      video.videoWidth;
 
-    if (!w || !h) {
-      throw new Error('No video frame available');
+    const height =
+      video.videoHeight;
+
+    if (!width || !height) {
+      throw new Error(
+        'No video frame available'
+      );
     }
 
-    const canvas = document.createElement('canvas');
+    const canvas =
+      document.createElement(
+        'canvas'
+      );
 
-    canvas.width = w;
-    canvas.height = h;
+    canvas.width =
+      width;
 
-    canvas.getContext('2d').drawImage(
-      v, 0, 0, w, h
+    canvas.height =
+      height;
+
+    const ctx =
+      canvas.getContext('2d');
+
+    ctx.drawImage(
+      video,
+      0,
+      0,
+      width,
+      height
     );
 
-    const blob = await new Promise(resolve =>
-      canvas.toBlob(resolve, 'image/png')
-    );
+    const blob =
+      await new Promise(
+        resolve => {
+          canvas.toBlob(
+            resolve,
+            'image/png'
+          );
+        }
+      );
 
     if (!blob) {
-      throw new Error('Could not create PNG');
+      throw new Error(
+        'Could not create PNG'
+      );
     }
 
-    if (imageUrl) URL.revokeObjectURL(imageUrl);
+    if (imageUrl) {
+      URL.revokeObjectURL(
+        imageUrl
+      );
+    }
 
-    imageUrl = URL.createObjectURL(blob);
+    imageUrl =
+      URL.createObjectURL(blob);
 
-    ui.screenshot.src = imageUrl;
-    ui.screenshot.hidden = false;
+    ui.screenshot.src =
+      imageUrl;
 
-    ui.imageDownload.href = imageUrl;
-    ui.imageDownload.download =
+    ui.screenshot.hidden =
+      false;
+
+    lastScreenshotFilename =
       `screenshot-${stamp()}.png`;
 
-    ui.imageDownload.classList.remove('hidden');
+    ui.imageDownload.href =
+      imageUrl;
+
+    ui.imageDownload.download =
+      lastScreenshotFilename;
+
+    ui.imageDownload.classList
+      .remove('hidden');
+
+    lastScreenshotBase64 =
+      await blobToBase64(blob);
 
     say(
-      'Screenshot captured. Use Download PNG to save it.'
+      'Screenshot captured. Download it or send it to Splice Bench.'
     );
 
-  } catch (e) {
-    say(`Screenshot failed: ${e.message}`);
+    controls();
+
+  } catch (err) {
+    say(
+      `Screenshot failed: ${err.message}`
+    );
   }
 }
 
-function screenshot() {
-  if (pendingShot) return;
 
-  if (!stream) {
-    return say('Choose a tab first.');
+// -----------------------------------------------------
+// SCREENSHOT WITH OPTIONAL DELAY
+// -----------------------------------------------------
+
+function screenshot() {
+  if (pendingShot) {
+    return;
   }
 
-  const delay = Number(ui.delay.value);
-
-  if (delay) {
+  if (!stream) {
     say(
-      `Screenshot scheduled in ${delay} seconds. ` +
-      'You can switch tabs now.'
+      'Choose a tab or screen first.'
+    );
+    return;
+  }
+
+  const delay =
+    Number(ui.delay.value || 0);
+
+  if (delay > 0) {
+    say(
+      `Screenshot in ${delay} seconds. Switch to the tab you want captured.`
     );
 
-    pendingShot = setTimeout(
-      captureFrame,
-      delay * 1000
-    );
+    pendingShot =
+      setTimeout(
+        captureFrame,
+        delay * 1000
+      );
+
   } else {
     captureFrame();
   }
 }
 
-ui.share.addEventListener('click', chooseCapture);
-ui.record.addEventListener('click', startRecording);
-ui.stop.addEventListener('click', stopRecording);
-ui.shot.addEventListener('click', screenshot);
 
-window.addEventListener('beforeunload', () => {
-  if (stream) {
-    stream.getTracks().forEach(t => t.stop());
+// -----------------------------------------------------
+// OPEN SPLICE BENCH
+// -----------------------------------------------------
+
+function openSpliceBench() {
+  const url =
+    String(
+      ui.spliceUrl?.value || ''
+    ).trim();
+
+  if (!url) {
+    say(
+      'Enter your Splice Bench URL first.'
+    );
+    return;
   }
 
-  if (videoUrl) URL.revokeObjectURL(videoUrl);
-  if (imageUrl) URL.revokeObjectURL(imageUrl);
-});
+  localStorage.setItem(
+    'spliceBenchUrl',
+    url
+  );
 
+  spliceWindow =
+    window.open(
+      url,
+      'spliceBench'
+    );
+
+  say(
+    'Splice Bench opened.'
+  );
+}
+
+
+// -----------------------------------------------------
+// SEND SCREENSHOT TO SPLICE BENCH
+// -----------------------------------------------------
+
+function sendToSpliceBench() {
+  if (!lastScreenshotBase64) {
+    say(
+      'Take a screenshot first.'
+    );
+    return;
+  }
+
+  const url =
+    String(
+      ui.spliceUrl?.value || ''
+    ).trim();
+
+  if (!url) {
+    say(
+      'Enter your Splice Bench URL first.'
+    );
+    return;
+  }
+
+  localStorage.setItem(
+    'spliceBenchUrl',
+    url
+  );
+
+  if (
+    !spliceWindow ||
+    spliceWindow.closed
+  ) {
+    spliceWindow =
+      window.open(
+        url,
+        'spliceBench'
+      );
+  }
+
+  if (!spliceWindow) {
+    say(
+      'Chrome blocked the Splice Bench window. Allow popups for this site.'
+    );
+    return;
+  }
+
+  const payload = {
+    type: 'SPLICE_SCREENSHOT',
+
+    filename:
+      lastScreenshotFilename ||
+      `screenshot-${stamp()}.png`,
+
+    mimeType:
+      'image/png',
+
+    base64:
+      lastScreenshotBase64
+  };
+
+  // Give Splice Bench time to load if it was just opened.
+  setTimeout(
+    () => {
+      try {
+        spliceWindow.postMessage(
+          payload,
+          '*'
+        );
+
+        say(
+          'Screenshot sent to Splice Bench.'
+        );
+
+      } catch (err) {
+        say(
+          `Could not send screenshot: ${err.message}`
+        );
+      }
+    },
+    1500
+  );
+}
+
+
+// -----------------------------------------------------
+// EVENT LISTENERS
+// -----------------------------------------------------
+
+ui.share?.addEventListener(
+  'click',
+  chooseCapture
+);
+
+ui.record?.addEventListener(
+  'click',
+  startRecording
+);
+
+ui.stop?.addEventListener(
+  'click',
+  stopRecording
+);
+
+ui.shot?.addEventListener(
+  'click',
+  screenshot
+);
+
+ui.saveSpliceUrl?.addEventListener(
+  'click',
+  saveSpliceUrl
+);
+
+ui.openSplice?.addEventListener(
+  'click',
+  openSpliceBench
+);
+
+ui.sendSplice?.addEventListener(
+  'click',
+  sendToSpliceBench
+);
+
+
+// -----------------------------------------------------
+// PAGE STARTUP / CLEANUP
+// -----------------------------------------------------
+
+window.addEventListener(
+  'beforeunload',
+  () => {
+
+    if (stream) {
+      stream
+        .getTracks()
+        .forEach(
+          track => track.stop()
+        );
+    }
+
+    if (videoUrl) {
+      URL.revokeObjectURL(
+        videoUrl
+      );
+    }
+
+    if (imageUrl) {
+      URL.revokeObjectURL(
+        imageUrl
+      );
+    }
+  }
+);
+
+loadSavedSpliceUrl();
 controls();
