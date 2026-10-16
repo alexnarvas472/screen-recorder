@@ -27,7 +27,16 @@
       <div class="info"><span id="source">No capture selected</span><span id="timer">00:00</span></div>
     </section>
     <section class="panel"><h2>Latest recording</h2><video id="playback" controls playsinline></video><a id="videoDownload" class="download hidden" download>Download video</a></section>
-    <section class="panel"><h2>Latest screenshot</h2><img id="screenshot" alt="Screenshot preview" hidden><a id="imageDownload" class="download hidden" download>Download PNG</a></section>
+    <section class="panel"><h2>Latest screenshot</h2><img id="screenshot" alt="Screenshot preview" hidden>
+      <button id="sendSplice" disabled>
+  Send to Splice Bench
+</button>
+
+<a id="imageDownload" class="hidden">
+  Download PNG
+</a>
+    
+    </section>
     <footer>Chrome will always ask what to share. Keep this page open while capturing. Videos use WebM format when supported by Chrome.</footer>
   </main>
 </body>
