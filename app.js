@@ -632,46 +632,17 @@ function openSpliceBench() {
 // -----------------------------------------------------
 // SEND SCREENSHOT TO SPLICE BENCH
 // -----------------------------------------------------
-
+ 
 function sendToSpliceBench() {
+
   if (!lastScreenshotBase64) {
-    say(
-      'Take a screenshot first.'
-    );
+    say('Take a screenshot first.');
     return;
   }
 
-  const url =
-    String(
-      ui.spliceUrl?.value || ''
-    ).trim();
-
-  if (!url) {
+  if (!window.opener || window.opener.closed) {
     say(
-      'Enter your Splice Bench URL first.'
-    );
-    return;
-  }
-
-  localStorage.setItem(
-    'spliceBenchUrl',
-    url
-  );
-
-  if (
-    !spliceWindow ||
-    spliceWindow.closed
-  ) {
-    spliceWindow =
-      window.open(
-        url,
-        'spliceBench'
-      );
-  }
-
-  if (!spliceWindow) {
-    say(
-      'Chrome blocked the Splice Bench window. Allow popups for this site.'
+      'Open this recorder from Splice Bench first.'
     );
     return;
   }
@@ -683,37 +654,30 @@ function sendToSpliceBench() {
       lastScreenshotFilename ||
       `screenshot-${stamp()}.png`,
 
-    mimeType:
-      'image/png',
+    mimeType: 'image/png',
 
-    base64:
-      lastScreenshotBase64
+    base64: lastScreenshotBase64
   };
 
-  // Give Splice Bench time to load if it was just opened.
-  setTimeout(
-    () => {
-      try {
-        spliceWindow.postMessage(
-          payload,
-          '*'
-        );
+  try {
 
-        say(
-          'Screenshot sent to Splice Bench.'
-        );
+    window.opener.postMessage(
+      payload,
+      '*'
+    );
 
-      } catch (err) {
-        say(
-          `Could not send screenshot: ${err.message}`
-        );
-      }
-    },
-    1500
-  );
+    say(
+      'Screenshot sent to Splice Bench.'
+    );
+
+  } catch (err) {
+
+    say(
+      'Could not send screenshot: ' +
+      err.message
+    );
+  }
 }
-
-
 // -----------------------------------------------------
 // EVENT LISTENERS
 // -----------------------------------------------------
