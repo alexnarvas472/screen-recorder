@@ -31,6 +31,7 @@ let started = 0;
 let ticker = null;
 
 let videoUrl = null;
+let territoryVideoBlob = null;
 let imageUrl = null;
 let pendingShot = null;
 
@@ -322,6 +323,8 @@ function startRecording() {
         URL.revokeObjectURL(videoUrl);
       }
 
+      territoryVideoBlob=blob;
+      if(document.getElementById('sendTerritoryVideo'))document.getElementById('sendTerritoryVideo').disabled=false;
       videoUrl =
         URL.createObjectURL(blob);
 
@@ -649,6 +652,7 @@ function sendToSpliceBench() {
 
   const payload = {
     type: 'SPLICE_SCREENSHOT',
+    territoryToken: new URLSearchParams(location.search).get('territoryToken') || '',
 
     filename:
       lastScreenshotFilename ||
@@ -750,3 +754,28 @@ window.addEventListener(
 
 loadSavedSpliceUrl();
 controls();
+
+
+// Territory video handoff. Capture remains here on GitHub, outside Apps Script.
+(function(){
+ const params=new URLSearchParams(location.search),token=params.get('territoryToken')||'';
+ let targetOrigin='*';
+ try{const u=new URL(params.get('returnOrigin'));if(u.protocol==='https:'&&u.hostname.endsWith('.googleusercontent.com'))targetOrigin=u.origin;}catch(e){}
+ const button=document.createElement('button');button.id='sendTerritoryVideo';button.textContent='Send video to Territory';button.disabled=true;
+ ui.videoDownload.insertAdjacentElement('afterend',button);
+ button.onclick=async()=>{
+  if(!territoryVideoBlob)return say('Record a video first.');
+  if(!window.opener||window.opener.closed)return say('Open this recorder from Territory first.');
+  if(!token)return say('Open this recorder using Territory’s video button.');
+  if(territoryVideoBlob.size>20*1024*1024)return say('Video exceeds 20 MB. Download it and make a shorter recording.');
+  button.disabled=true;
+  try{window.opener.postMessage({type:'TERRITORY_VIDEO',territoryToken:token,base64:await blobToBase64(territoryVideoBlob),mimeType:territoryVideoBlob.type,filename:ui.videoDownload.download||'street.webm'},targetOrigin);say('Video sent. Check Territory and click Save video.');}
+  catch(e){say('Unable to send: '+e.message);}finally{button.disabled=false;}
+ };
+ window.addEventListener('message',event=>{
+  if(event.source!==window.opener||!token||event.data?.territoryToken!==token)return;
+  if(targetOrigin!=='*'&&event.origin!==targetOrigin)return;
+  if(event.data.type==='TERRITORY_RECEIVED')say('Territory received your capture. Return there to edit/save it.');
+  if(event.data.type==='TERRITORY_ERROR')say('Territory could not accept it: '+event.data.message);
+ });
+})();
