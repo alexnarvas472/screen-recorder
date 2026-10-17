@@ -403,8 +403,15 @@ function blobToBase64(blob) {
         const result =
           String(reader.result);
 
-        const base64 =
-          result.split(',')[1];
+        const marker = ';base64,';
+const start = result.indexOf(marker);
+
+if (start < 0) {
+  reject(new Error('Could not encode the capture.'));
+  return;
+}
+
+const base64 = result.slice(start + marker.length);
 
         resolve(base64);
       };
