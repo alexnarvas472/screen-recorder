@@ -768,21 +768,35 @@ controls();
  const params=new URLSearchParams(location.search),token=params.get('territoryToken')||'';
  let targetOrigin='*';
  try{const u=new URL(params.get('returnOrigin'));if(u.protocol==='https:'&&u.hostname.endsWith('.googleusercontent.com'))targetOrigin=u.origin;}catch(e){}
- const button=document.createElement('button');button.id='sendTerritoryVideo';button.textContent='Send video to Territory';button.disabled=true;
+ // Opened from the 3D Workflow app (3D APPS > a tool > Videos > Record a tutorial)
+ const workflowTool=params.get('target')==='3dapps'?(params.get('tool')||''):'';
+ const appName=workflowTool?'3D Workflow':'Territory';
+ const button=document.createElement('button');button.id='sendTerritoryVideo';
+ button.textContent=workflowTool?'Send to '+workflowTool+' videos':'Send video to Territory';button.disabled=true;
  ui.videoDownload.insertAdjacentElement('afterend',button);
+ if(workflowTool)say('Recording a tutorial for '+workflowTool+'. When you stop, click “'+button.textContent+'”.');
  button.onclick=async()=>{
   if(!territoryVideoBlob)return say('Record a video first.');
-  if(!window.opener||window.opener.closed)return say('Open this recorder from Territory first.');
-  if(!token)return say('Open this recorder using Territory’s video button.');
-  if(territoryVideoBlob.size>20*1024*1024)return say('Video exceeds 20 MB. Download it and make a shorter recording.');
+  if(!window.opener||window.opener.closed)return say('Open this recorder from '+appName+' first.');
+  if(!token)return say('Open this recorder using '+appName+'’s video button.');
   button.disabled=true;
-  try{window.opener.postMessage({type:'TERRITORY_VIDEO',territoryToken:token,base64:await blobToBase64(territoryVideoBlob),mimeType:territoryVideoBlob.type,filename:ui.videoDownload.download||'street.webm'},targetOrigin);say('Video sent. Check Territory and click Save video.');}
+  try{
+   if(workflowTool){
+    // The video itself is sent (no size limit); the app uploads it to Drive in pieces.
+    const ext=(territoryVideoBlob.type||'').includes('mp4')?'.mp4':'.webm';
+    window.opener.postMessage({type:'WORKFLOW_VIDEO',territoryToken:token,blob:territoryVideoBlob,mimeType:territoryVideoBlob.type,filename:workflowTool+' tutorial '+stamp()+ext,tool:workflowTool},targetOrigin);
+    say('Video sent to '+workflowTool+'. Uploading to Drive — keep this window open until it says saved.');
+   }else{
+    if(territoryVideoBlob.size>20*1024*1024)return say('Video exceeds 20 MB. Download it and make a shorter recording.');
+    window.opener.postMessage({type:'TERRITORY_VIDEO',territoryToken:token,base64:await blobToBase64(territoryVideoBlob),mimeType:territoryVideoBlob.type,filename:ui.videoDownload.download||'street.webm'},targetOrigin);say('Video sent. Check Territory and click Save video.');
+   }
+  }
   catch(e){say('Unable to send: '+e.message);}finally{button.disabled=false;}
  };
  window.addEventListener('message',event=>{
   if(event.source!==window.opener||!token||event.data?.territoryToken!==token)return;
   if(targetOrigin!=='*'&&event.origin!==targetOrigin)return;
-  if(event.data.type==='TERRITORY_RECEIVED')say('Territory received your capture. Return there to edit/save it.');
-  if(event.data.type==='TERRITORY_ERROR')say('Territory could not accept it: '+event.data.message);
+  if(event.data.type==='TERRITORY_RECEIVED')say(workflowTool?'Saved to Drive and added to '+workflowTool+' videos. You can close this window.':'Territory received your capture. Return there to edit/save it.');
+  if(event.data.type==='TERRITORY_ERROR')say(appName+' could not accept it: '+event.data.message);
  });
 })();
