@@ -255,11 +255,18 @@ let session = null;
     '</select>';
   document.querySelector('.options').appendChild(label);
   ui.split = $('split');
-  let saved = '4';
-  try { saved = localStorage.getItem(SPLIT_KEY) || '4'; } catch (e) {}
+  // Splitting starts on (4 minutes) for EO, and when the recorder is opened on its own.
+  // Territory and the 3D Workflow app expect one video, so for them it starts Off.
+  // The choice is remembered separately for each app.
+  const q = new URLSearchParams(location.search);
+  const mode = q.get('target') === '3dapps' ? (q.get('tool') === 'EO inbox' ? 'eo' : '3dapps') : q.get('territoryToken') ? 'territory' : 'eo';
+  const key = mode === 'eo' ? SPLIT_KEY : SPLIT_KEY + ':' + mode;
+  const fallback = mode === 'eo' ? '4' : '0';
+  let saved = fallback;
+  try { saved = localStorage.getItem(key) || fallback; } catch (e) {}
   ui.split.value = saved;
-  if (!ui.split.value) ui.split.value = '4';
-  ui.split.onchange = () => { try { localStorage.setItem(SPLIT_KEY, ui.split.value); } catch (e) {} };
+  if (!ui.split.value) ui.split.value = fallback;
+  ui.split.onchange = () => { try { localStorage.setItem(key, ui.split.value); } catch (e) {} };
 
   const box = document.createElement('div');
   box.id = 'partsBox';
