@@ -69,6 +69,8 @@ function controls() {
   ui.shot.disabled = !active;
   ui.audio.disabled = recording;
 
+  if (typeof drawArea === 'function' && ui.areaLayer) drawArea();
+
   if (ui.sendSplice) {
     ui.sendSplice.disabled =
       !lastScreenshotBase64;
@@ -128,10 +130,16 @@ async function chooseCapture() {
     stream =
       await navigator.mediaDevices.getDisplayMedia({
         video: {
-          frameRate: 30
+          frameRate: 30,
+          displaySurface: 'browser'   // Chrome opens on the tab list
         },
-        audio: ui.audio.checked
+        audio: ui.audio.checked,
+        selfBrowserSurface: 'exclude',   // don't offer this recorder tab itself
+        surfaceSwitching: 'include'      // lets you switch the shared tab from Chrome's sharing bar
       });
+
+    area.rect = null;
+    area.editing = false;
 
     ui.live.srcObject = stream;
 
@@ -233,6 +241,183 @@ function formatElapsed() {
 
 
 // -----------------------------------------------------
+// RECORD ONLY AN AREA
+// After sharing, drag a box over the preview: only that part of the
+// shared tab / window / screen is recorded (and used for screenshots).
+// The cropping happens on each frame as it arrives, so it keeps
+// working while this page is in the background.
+// -----------------------------------------------------
+
+const area = { rect: null, editing: false };   // rect = fractions {x, y, w, h} of the shared picture
+
+(function addAreaPicker() {
+  const css = document.createElement('style');
+  css.textContent =
+    '.livewrap{position:relative}' +
+    '#areaLayer{position:absolute;overflow:hidden;pointer-events:none}' +
+    '#areaLayer.editing{pointer-events:auto;cursor:crosshair;outline:2px dashed #4fb3ff}' +
+    '#areaBox{position:absolute;border:2px solid #4fb3ff;box-shadow:0 0 0 9999px rgba(0,0,0,.55);cursor:move}' +
+    '#areaLayer:not(.editing) #areaBox{cursor:default}' +
+    '#areaBox.rec{border-color:#ff5a5a}' +
+    '#areaBox i{position:absolute;width:14px;height:14px;background:#4fb3ff;border:2px solid #0d1625;border-radius:3px}' +
+    '#areaLayer:not(.editing) #areaBox i{display:none}' +
+    '#areaBox i[data-h=nw]{left:-8px;top:-8px;cursor:nwse-resize}#areaBox i[data-h=ne]{right:-8px;top:-8px;cursor:nesw-resize}' +
+    '#areaBox i[data-h=sw]{left:-8px;bottom:-8px;cursor:nesw-resize}#areaBox i[data-h=se]{right:-8px;bottom:-8px;cursor:nwse-resize}' +
+    '#areaBox b{position:absolute;left:0;top:-24px;font:600 12px system-ui;background:#4fb3ff;color:#0d1625;padding:2px 6px;border-radius:4px;white-space:nowrap}' +
+    '.areabar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}.areabar button{padding:7px 11px}.areabar span{color:#b9cbe3;font-size:.92rem}';
+  document.head.appendChild(css);
+
+  const wrap = document.createElement('div');
+  wrap.className = 'livewrap';
+  ui.live.parentNode.insertBefore(wrap, ui.live);
+  wrap.appendChild(ui.live);
+  wrap.insertAdjacentHTML('beforeend',
+    '<div id="areaLayer"><div id="areaBox" hidden><b></b><i data-h="nw"></i><i data-h="ne"></i><i data-h="sw"></i><i data-h="se"></i></div></div>');
+  wrap.insertAdjacentHTML('afterend',
+    '<div class="areabar"><button type="button" id="areaPick" disabled>▭ Record only an area</button>' +
+    '<button type="button" id="areaFull" hidden>Full view</button>' +
+    '<span id="areaHint">Share a tab first. Tip: share one tab, then you can use the rest of your computer freely.</span></div>');
+  ui.areaLayer = $('areaLayer');
+  ui.areaBox = $('areaBox');
+  ui.areaPick = $('areaPick');
+  ui.areaFull = $('areaFull');
+  ui.areaHint = $('areaHint');
+
+  ui.areaPick.onclick = () => {
+    area.editing = !area.editing;
+    drawArea();
+  };
+  ui.areaFull.onclick = () => { area.rect = null; area.editing = false; drawArea(); };
+
+  // dragging: draw a new box, move it, or pull a corner
+  let drag = null;
+  ui.areaLayer.addEventListener('pointerdown', e => {
+    if (!area.editing) return;
+    e.preventDefault();
+    const r = ui.areaLayer.getBoundingClientRect();
+    const px = (e.clientX - r.left) / r.width, py = (e.clientY - r.top) / r.height;
+    const h = e.target.dataset && e.target.dataset.h;
+    const inBox = area.rect && px >= area.rect.x && px <= area.rect.x + area.rect.w && py >= area.rect.y && py <= area.rect.y + area.rect.h;
+    drag = { h: h || (inBox ? 'move' : 'new'), sx: px, sy: py, start: area.rect ? Object.assign({}, area.rect) : null };
+    ui.areaLayer.setPointerCapture(e.pointerId);
+  });
+  ui.areaLayer.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const r = ui.areaLayer.getBoundingClientRect();
+    const clamp = v => Math.min(1, Math.max(0, v));
+    const px = clamp((e.clientX - r.left) / r.width), py = clamp((e.clientY - r.top) / r.height);
+    const s = drag.start, min = 0.05;
+    let x1, y1, x2, y2;
+    if (drag.h === 'new') { x1 = Math.min(drag.sx, px); x2 = Math.max(drag.sx, px); y1 = Math.min(drag.sy, py); y2 = Math.max(drag.sy, py); }
+    else if (drag.h === 'move') {
+      const dx = Math.min(1 - s.x - s.w, Math.max(-s.x, px - drag.sx)), dy = Math.min(1 - s.y - s.h, Math.max(-s.y, py - drag.sy));
+      x1 = s.x + dx; y1 = s.y + dy; x2 = x1 + s.w; y2 = y1 + s.h;
+    } else {
+      x1 = s.x; y1 = s.y; x2 = s.x + s.w; y2 = s.y + s.h;
+      if (drag.h.includes('w')) x1 = Math.min(px, x2 - min); else x2 = Math.max(px, x1 + min);
+      if (drag.h.includes('n')) y1 = Math.min(py, y2 - min); else y2 = Math.max(py, y1 + min);
+    }
+    if (x2 - x1 >= 0.02 && y2 - y1 >= 0.02) area.rect = { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+    drawArea();
+  });
+  const end = () => {
+    if (!drag) return;
+    drag = null;
+    if (area.rect && (area.rect.w < 0.05 || area.rect.h < 0.05)) area.rect = null;   // a click, not a drag
+    drawArea();
+  };
+  ui.areaLayer.addEventListener('pointerup', end);
+  ui.areaLayer.addEventListener('pointercancel', end);
+
+  ui.live.addEventListener('loadedmetadata', drawArea);
+  ui.live.addEventListener('resize', drawArea);
+  window.addEventListener('resize', drawArea);
+})();
+
+// the shared picture's size in pixels, and the box in pixels (even numbers, as video needs)
+function areaPixels(W, H) {
+  if (!area.rect || !W || !H) return null;
+  const even = v => Math.max(0, Math.floor(v / 2) * 2);
+  const x = even(area.rect.x * W), y = even(area.rect.y * H);
+  const w = Math.max(2, Math.min(even(area.rect.w * W), even(W - x))), h = Math.max(2, Math.min(even(area.rect.h * H), even(H - y)));
+  return { x, y, width: w, height: h };
+}
+
+function drawArea() {
+  const v = ui.live, vw = v.videoWidth, vh = v.videoHeight;
+  const live = !!stream && !!vw;
+  const recording = recorder?.state === 'recording';
+  if (recording) area.editing = false;
+
+  // place the layer exactly over the picture (the preview letterboxes it)
+  if (live) {
+    const ew = v.clientWidth, eh = v.clientHeight, k = Math.min(ew / vw, eh / vh);
+    const cw = vw * k, ch = vh * k;
+    Object.assign(ui.areaLayer.style, { left: (v.offsetLeft + (ew - cw) / 2) + 'px', top: (v.offsetTop + (eh - ch) / 2) + 'px', width: cw + 'px', height: ch + 'px' });
+  }
+  ui.areaLayer.classList.toggle('editing', live && area.editing);
+  const r = live && area.rect;
+  ui.areaBox.hidden = !r;
+  if (r) {
+    Object.assign(ui.areaBox.style, { left: area.rect.x * 100 + '%', top: area.rect.y * 100 + '%', width: area.rect.w * 100 + '%', height: area.rect.h * 100 + '%' });
+    const px = areaPixels(vw, vh);
+    ui.areaBox.querySelector('b').textContent = (recording ? '● recording ' : '') + px.width + ' × ' + px.height;
+    ui.areaBox.classList.toggle('rec', recording);
+  }
+  ui.areaPick.disabled = !live || recording;
+  ui.areaPick.textContent = area.editing ? '✓ Done choosing' : area.rect ? '▭ Change area' : '▭ Record only an area';
+  ui.areaFull.hidden = !area.rect || recording;
+  ui.areaHint.textContent = !stream
+    ? 'Share a tab first. Tip: share one tab, then you can use the rest of your computer freely.'
+    : recording
+      ? (area.rect ? 'Recording only the box. To change it, stop and start again.' : 'Recording everything you shared.')
+      : area.editing
+        ? 'Drag on the preview to draw the box, drag inside it to move it, or pull a corner.'
+        : area.rect ? 'Only the box will be recorded (and used for screenshots).' : 'Records everything you shared.';
+}
+
+// a stream that carries only the box, cropped frame by frame
+function croppedStream(src) {
+  const vt = src.getVideoTracks()[0];
+  if (!area.rect || !vt) return null;
+  if (!window.MediaStreamTrackProcessor || !window.MediaStreamTrackGenerator || !window.VideoFrame) {
+    say('This browser cannot record just an area, so the whole capture will be recorded. Use Chrome.');
+    return null;
+  }
+  const proc = new MediaStreamTrackProcessor({ track: vt });
+  const gen = new MediaStreamTrackGenerator({ kind: 'video' });
+  const stop = new AbortController();
+  // each frame's box is copied onto a small canvas, which becomes the recorded frame
+  // (runs once per frame as it arrives, not on a timer, so it keeps going in the background)
+  let canvas = null, g = null;
+  proc.readable
+    .pipeThrough(new TransformStream({
+      transform(frame, out) {
+        try {
+          const px = areaPixels(frame.displayWidth, frame.displayHeight);
+          if (!px) { out.enqueue(frame.clone()); return; }
+          if (!canvas || canvas.width !== px.width || canvas.height !== px.height) {
+            canvas = new OffscreenCanvas(px.width, px.height);
+            g = canvas.getContext('2d', { alpha: false });
+          }
+          g.drawImage(frame, px.x, px.y, px.width, px.height, 0, 0, px.width, px.height);
+          out.enqueue(new VideoFrame(canvas, { timestamp: frame.timestamp }));
+        } catch (e) {
+          try { out.enqueue(frame.clone()); } catch (e2) {}
+        } finally {
+          frame.close();
+        }
+      }
+    }))
+    .pipeTo(gen.writable, { signal: stop.signal })
+    .catch(() => {});
+  return {
+    stream: new MediaStream([gen, ...src.getAudioTracks()]),
+    stop() { try { stop.abort(); } catch (e) {} try { gen.stop(); } catch (e) {} }
+  };
+}
+
+// -----------------------------------------------------
 // RECORDING, SPLIT INTO PARTS
 // Every few minutes (4 by default) the current part is closed
 // and the next one starts at once. Each part is a normal,
@@ -326,6 +511,13 @@ function startRecording() {
     stopped: false
   };
 
+  session.crop = croppedStream(stream);
+  session.recStream = session.crop ? session.crop.stream : stream;
+  // a smaller box needs fewer bits for the same sharpness: scale the video's data rate with its size
+  // (full HD keeps 3.5 Mbps; never below 1 Mbps so text stays crisp)
+  const box = session.crop && areaPixels(ui.live.videoWidth, ui.live.videoHeight);
+  session.bits = box ? Math.round(Math.min(3500000, Math.max(1000000, 3500000 * box.width * box.height / (1920 * 1080)))) : 3500000;
+
   ui.partsList.innerHTML = '';
   ui.partsBox.classList.add('hidden');
   ui.videoDownload.classList.add('hidden');
@@ -334,6 +526,7 @@ function startRecording() {
     recorder = newPartRecorder();
   } catch (err) {
     say(`Cannot record: ${err.message}`);
+    if (session.crop) session.crop.stop();
     session = null;
     controls();
     return;
@@ -347,8 +540,11 @@ function startRecording() {
   formatElapsed();
   ticker = setInterval(formatElapsed, 500);
 
+  drawArea();
+
   say(
-    'Recording. Switch to the shared tab and continue working.' +
+    (session.crop ? 'Recording only the box you chose. ' : 'Recording. ') +
+    'Switch to the shared tab and continue working.' +
     (minutes ? ` A new part starts every ${minutes} minutes.` : '')
   );
 
@@ -360,9 +556,12 @@ function newPartRecorder() {
   const s = session;
   const n = ++s.part;
   const bits = [];
-  const r = new MediaRecorder(stream, {
+  const r = new MediaRecorder(s.recStream || stream, {
     mimeType: s.mimeType,
-    videoBitsPerSecond: 3500000
+    videoBitsPerSecond: s.bits || 3500000,
+    // a full picture at least every 2 seconds, so the video can always be cut or skipped through cleanly
+    // (without it, a still screen gets one only every ~100 frames, which can be minutes apart)
+    videoKeyFrameIntervalDuration: 2000
   });
 
   r.ondataavailable = event => {
@@ -416,6 +615,8 @@ function finishPart(s, n, bits, last) {
   if (last) {
     clearInterval(ticker);
     ticker = null;
+    if (s.crop) { s.crop.stop(); s.crop = null; }
+    drawArea();
   }
 
   const blob = new Blob(bits, { type: s.mimeType });
@@ -619,21 +820,21 @@ async function captureFrame() {
         'canvas'
       );
 
+    const box = areaPixels(width, height) || { x: 0, y: 0, width, height };
+
     canvas.width =
-      width;
+      box.width;
 
     canvas.height =
-      height;
+      box.height;
 
     const ctx =
       canvas.getContext('2d');
 
     ctx.drawImage(
       video,
-      0,
-      0,
-      width,
-      height
+      box.x, box.y, box.width, box.height,
+      0, 0, box.width, box.height
     );
 
     const blob =
