@@ -483,17 +483,27 @@ function startRecording() {
     return;
   }
 
-  const types = [
+  // For EO (and when opened on its own) record MP4 (H.264): Gemini and Drive handle it best.
+  // Territory and the 3D Workflow app keep WebM, as before. If Chrome can't record MP4, WebM is used.
+  const q = new URLSearchParams(location.search);
+  const forEO = q.get('target') === '3dapps' ? q.get('tool') === 'EO inbox' : !q.get('territoryToken');
+  const mp4 = forEO ? [
+    'video/mp4;codecs=avc1.640028,mp4a.40.2',
+    'video/mp4;codecs=avc1.4d0028,mp4a.40.2',
+    'video/mp4;codecs=avc1,mp4a.40.2',
+    'video/mp4;codecs=avc1'
+  ] : [];
+  const types = mp4.concat([
     'video/webm;codecs=vp9,opus',
     'video/webm;codecs=vp8,opus',
     'video/webm'
-  ];
+  ]);
 
   const mimeType =
     types.find(type => MediaRecorder.isTypeSupported(type));
 
   if (!mimeType) {
-    say('This browser does not support WebM recording.');
+    say('This browser cannot record video.');
     return;
   }
 
